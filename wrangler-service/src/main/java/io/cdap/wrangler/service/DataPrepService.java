@@ -35,6 +35,7 @@ import io.cdap.wrangler.service.s3.S3Handler;
 import io.cdap.wrangler.service.schema.DataModelHandler;
 import io.cdap.wrangler.service.schema.SchemaRegistryHandler;
 import io.cdap.wrangler.service.spanner.SpannerHandler;
+import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import io.cdap.wrangler.store.workspace.WorkspaceStore;
 
 /**
@@ -57,6 +58,7 @@ public class DataPrepService extends AbstractSystemService {
     createTable(SchemaRegistry.ENTRY_TABLE_SPEC);
     createTable(WorkspaceDataset.TABLE_SPEC);
     createTable(WorkspaceStore.WORKSPACE_TABLE_SPEC);
+    createTable(UpgradeStore.UPGRADE_TABLE_SPEC);
 
     addHandler(new DirectivesHandler());
     addHandler(new SchemaRegistryHandler());
