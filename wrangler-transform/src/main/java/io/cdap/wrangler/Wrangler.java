@@ -81,7 +81,7 @@ import javax.annotation.Nullable;
  * by the user.
  */
 @Plugin(type = "transform")
-@Name("Wrangler")
+@Name("DaaS Wrangler")
 @Description("Wrangler - A interactive tool for data cleansing and transformation.")
 public class Wrangler extends Transform<StructuredRecord, StructuredRecord> {
   private static final Logger LOG = LoggerFactory.getLogger(Wrangler.class);
