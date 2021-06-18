@@ -39,6 +39,7 @@ import io.cdap.wrangler.service.schema.DataModelHandler;
 import io.cdap.wrangler.service.schema.SchemaRegistryHandler;
 import io.cdap.wrangler.service.spanner.SpannerHandler;
 import io.cdap.wrangler.store.upgrade.UpgradeEntityType;
+import io.cdap.wrangler.store.upgrade.UpgradeState;
 import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import io.cdap.wrangler.store.workspace.WorkspaceStore;
 import org.slf4j.Logger;
@@ -51,6 +52,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class DataPrepService extends AbstractSystemService {
   private static final Logger LOG = LoggerFactory.getLogger(DataPrepService.class);
+  private static final UpgradeState PRE_UPGRADE = new UpgradeState(0L);
 
   private final ConnectionTypeConfig config;
 
@@ -94,16 +96,20 @@ public class DataPrepService extends AbstractSystemService {
 
     UpgradeStore upgradeStore = new UpgradeStore(context);
     WorkspaceStore wsStore = new WorkspaceStore(context);
-    boolean isConnDone = upgradeStore.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION);
-    boolean isWsDone = upgradeStore.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE);
-    if (isWsDone && isConnDone) {
+    UpgradeState connState = upgradeStore.getEntityUpgradeState(UpgradeEntityType.CONNECTION);
+    UpgradeState wsState = upgradeStore.getEntityUpgradeState(UpgradeEntityType.WORKSPACE);
+    boolean isConnDone = connState != null && connState.getVersion() == 1L;
+    boolean isWsDone = wsState != null && wsState.getVersion() == 1L;
+    if (isConnDone && isWsDone) {
       return;
     }
 
     long timestampNowMillis = System.currentTimeMillis();
     long upgradeBefore =
-      upgradeStore.setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.CONNECTION, timestampNowMillis);
-    upgradeStore.setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.WORKSPACE, timestampNowMillis);
+      upgradeStore.initializeAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.CONNECTION, timestampNowMillis,
+                                                               PRE_UPGRADE);
+    upgradeStore.initializeAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.WORKSPACE, timestampNowMillis,
+                                                             PRE_UPGRADE);
     long upgradeBeforeTsSecs = TimeUnit.MILLISECONDS.toSeconds(upgradeBefore);
     if (!isConnDone) {
       try {

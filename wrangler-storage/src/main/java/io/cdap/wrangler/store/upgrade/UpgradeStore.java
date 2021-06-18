@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import javax.annotation.Nullable;
 
 /**
  * Upgrade store to store upgrade information for each namespace,
@@ -72,36 +73,41 @@ public class UpgradeStore {
   }
 
   /**
-   * Set the upgrade timestamp for the given upgrade types if not there and return the upgrade timestamp.
-   * This method should only be used once when the service starts up.
+   * Initialize the upgrade timestamp and state for the given upgrade types if not there and
+   * return the upgrade timestamp. This method should be called before any upgrade starts.
    * The upgrade will only operate on entities created before this timestamp.
    *
+   * @param type the upgrade entity type
+   * @param timestampMillis the upgrade timestamp in millis
+   * @param preUpgradeState the state before upgrade
    * @return the upgrade timestamp
    */
-  public long setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType type, long timestampMillis) {
+  public long initializeAndRetrieveUpgradeTimestampMillis(UpgradeEntityType type, long timestampMillis,
+                                                          UpgradeState preUpgradeState) {
     return TransactionRunners.run(transactionRunner, context -> {
       StructuredTable table = context.getTable(TABLE_ID);
       Collection<Field<?>> fields = getPrimaryKeys(SYSTEM_NS, type);
       Optional<StructuredRow> row = table.read(fields);
 
       fields.add(Fields.longField(UPGRADE_TIMESTAMP, timestampMillis));
+      fields.add(Fields.stringField(UPGRADE_STATE_COL, GSON.toJson(preUpgradeState)));
 
-      // return if it is still there
-      if (row.isPresent() && row.get().getLong(UPGRADE_TIMESTAMP) != null) {
-        return row.get().getLong(UPGRADE_TIMESTAMP);
+      if (!row.isPresent()) {
+        table.upsert(fields);
+        return timestampMillis;
       }
 
-      table.upsert(fields);
-      return timestampMillis;
+      // return the upgrade timestamp
+      return row.get().getLong(UPGRADE_TIMESTAMP);
     });
   }
 
   /**
    * Set the upgrade complete status for the entity type
    */
-  public void setEntityUpgradeComplete(UpgradeEntityType type) {
+  public void setEntityUpgradeState(UpgradeEntityType type, UpgradeState upgradeState) {
     TransactionRunners.run(transactionRunner, context -> {
-      setComplete(SYSTEM_NS, context, type);
+      setComplete(SYSTEM_NS, context, type, upgradeState);
     });
   }
 
@@ -110,27 +116,28 @@ public class UpgradeStore {
    *
    * @param namespace namespace that completed upgrade
    */
-  public void setEntityUpgradeComplete(NamespaceSummary namespace, UpgradeEntityType type) {
+  public void setEntityUpgradeState(NamespaceSummary namespace, UpgradeEntityType type, UpgradeState upgradeState) {
     TransactionRunners.run(transactionRunner, context -> {
-      setComplete(namespace, context, type);
+      setComplete(namespace, context, type, upgradeState);
     });
   }
 
   /**
-   * Checks whether an entity type is upgrade complete
+   * Get the upgrade state
    */
-  public boolean isEntityUpgradeComplete(UpgradeEntityType type) {
+  @Nullable
+  public UpgradeState getEntityUpgradeState(UpgradeEntityType type) {
     return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(SYSTEM_NS, context, type);
+      return getEntityUpgradeState(SYSTEM_NS, context, type);
     });
   }
 
   /**
    * Checks whether an entity type is upgrade complete in a namespace
    */
-  public boolean isEntityUpgradeComplete(NamespaceSummary namespace, UpgradeEntityType type) {
+  public UpgradeState getEntityUpgradeState(NamespaceSummary namespace, UpgradeEntityType type) {
     return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(namespace, context, type);
+      return getEntityUpgradeState(namespace, context, type);
     });
   }
 
@@ -143,23 +150,24 @@ public class UpgradeStore {
   }
 
   private void setComplete(NamespaceSummary namespace, StructuredTableContext context,
-                           UpgradeEntityType type) throws IOException {
+                           UpgradeEntityType type, UpgradeState upgradeState) throws IOException {
     StructuredTable table = context.getTable(TABLE_ID);
     Collection<Field<?>> fields = getPrimaryKeys(namespace, type);
-    fields.add(Fields.stringField(UPGRADE_STATE_COL, GSON.toJson(new UpgradeState(true))));
+    fields.add(Fields.stringField(UPGRADE_STATE_COL, GSON.toJson(upgradeState)));
     table.upsert(fields);
   }
 
-  private boolean isComplete(NamespaceSummary namespace, StructuredTableContext context,
-                             UpgradeEntityType type) throws IOException {
+  @Nullable
+  private UpgradeState getEntityUpgradeState(NamespaceSummary namespace, StructuredTableContext context,
+                                             UpgradeEntityType type) throws IOException {
     StructuredTable table = context.getTable(TABLE_ID);
     Collection<Field<?>> fields = getPrimaryKeys(namespace, type);
     Optional<StructuredRow> row = table.read(fields);
     if (!row.isPresent() || row.get().getString(UPGRADE_STATE_COL) == null) {
-      return false;
+      return null;
     }
 
-    return GSON.fromJson(row.get().getString(UPGRADE_STATE_COL), UpgradeState.class).isUpgradeComplete();
+    return GSON.fromJson(row.get().getString(UPGRADE_STATE_COL), UpgradeState.class);
   }
 
   private Collection<Field<?>> getPrimaryKeys(NamespaceSummary namespace, UpgradeEntityType entityType) {

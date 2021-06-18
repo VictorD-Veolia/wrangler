@@ -28,6 +28,7 @@ import io.cdap.wrangler.proto.Namespace;
 import io.cdap.wrangler.proto.connection.Connection;
 import io.cdap.wrangler.proto.connection.ConnectionType;
 import io.cdap.wrangler.store.upgrade.UpgradeEntityType;
+import io.cdap.wrangler.store.upgrade.UpgradeState;
 import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,7 @@ import java.util.List;
  */
 public class ConnectionUpgrader {
   private static final Logger LOG = LoggerFactory.getLogger(ConnectionUpgrader.class);
+  private static final UpgradeState CONN_COMPLETE_STATE = new UpgradeState(1L);
 
   private final UpgradeStore upgradeStore;
   private final SystemServiceContext context;
@@ -57,11 +59,12 @@ public class ConnectionUpgrader {
   public void upgradeConnections() throws Exception {
     List<NamespaceSummary> namespaces = context.listNamespaces();
     for (NamespaceSummary ns : namespaces) {
-      if (!upgradeStore.isEntityUpgradeComplete(ns, UpgradeEntityType.CONNECTION)) {
+      UpgradeState state = upgradeStore.getEntityUpgradeState(ns, UpgradeEntityType.CONNECTION);
+      if (state == null || state.getVersion() == 0L) {
         upgradeConnectionsInNamespace(ns);
       }
     }
-    upgradeStore.setEntityUpgradeComplete(UpgradeEntityType.CONNECTION);
+    upgradeStore.setEntityUpgradeState(UpgradeEntityType.CONNECTION, CONN_COMPLETE_STATE);
   }
 
   private void upgradeConnectionsInNamespace(NamespaceSummary namespace) {
@@ -108,6 +111,6 @@ public class ConnectionUpgrader {
         LOG.warn("Failed to upgrade connection {}", connection.getName(), e);
       }
     }
-    upgradeStore.setEntityUpgradeComplete(namespace, UpgradeEntityType.CONNECTION);
+    upgradeStore.setEntityUpgradeState(namespace, UpgradeEntityType.CONNECTION, CONN_COMPLETE_STATE);
   }
 }

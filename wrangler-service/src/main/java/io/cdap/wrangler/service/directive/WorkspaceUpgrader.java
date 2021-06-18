@@ -36,6 +36,7 @@ import io.cdap.wrangler.proto.workspace.v2.StageSpec;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceDetail;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceId;
 import io.cdap.wrangler.store.upgrade.UpgradeEntityType;
+import io.cdap.wrangler.store.upgrade.UpgradeState;
 import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import io.cdap.wrangler.store.workspace.WorkspaceStore;
 import org.slf4j.Logger;
@@ -50,6 +51,7 @@ import java.util.stream.Collectors;
  */
 public class WorkspaceUpgrader {
   private static final Logger LOG = LoggerFactory.getLogger(WorkspaceUpgrader.class);
+  private static final UpgradeState WS_COMPLETE_STATE = new UpgradeState(1L);
 
   private final UpgradeStore upgradeStore;
   private final SystemServiceContext context;
@@ -69,11 +71,12 @@ public class WorkspaceUpgrader {
   public void upgradeWorkspaces() throws Exception {
     List<NamespaceSummary> namespaces = context.listNamespaces();
     for (NamespaceSummary ns : namespaces) {
-      if (!upgradeStore.isEntityUpgradeComplete(ns, UpgradeEntityType.WORKSPACE)) {
+      UpgradeState state = upgradeStore.getEntityUpgradeState(ns, UpgradeEntityType.WORKSPACE);
+      if (state == null || state.getVersion() == 0L) {
         upgradeWorkspacesInConnections(ns);
       }
     }
-    upgradeStore.setEntityUpgradeComplete(UpgradeEntityType.WORKSPACE);
+    upgradeStore.setEntityUpgradeState(UpgradeEntityType.WORKSPACE, WS_COMPLETE_STATE);
   }
 
   private void upgradeWorkspacesInConnections(NamespaceSummary namespace) {
@@ -105,8 +108,8 @@ public class WorkspaceUpgrader {
         ConnectionType.valueOf(workspace.getProperties().get(PropertyIds.CONNECTION_TYPE).toUpperCase());
       // if it is not upgradable workspace types, just ignore and continue, i.e, ADLS
       if (!ConnectionType.WORKSPACE_UPGRADABLE_TYPES.contains(connectionType)) {
-        LOG.warn("Workspace {} of type {} is not upgradable. This workspace will not be upgraded",
-                 workspace.getName(), connectionType);
+        LOG.debug("Workspace {} of type {} is not upgradable. This workspace will not be upgraded",
+                  workspace.getName(), connectionType);
         continue;
       }
 
@@ -146,6 +149,6 @@ public class WorkspaceUpgrader {
       }
     }
 
-    upgradeStore.setEntityUpgradeComplete(namespace, UpgradeEntityType.WORKSPACE);
+    upgradeStore.setEntityUpgradeState(namespace, UpgradeEntityType.WORKSPACE, WS_COMPLETE_STATE);
   }
 }

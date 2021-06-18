@@ -54,12 +54,15 @@ public class UpgradeStoreTest extends SystemAppTestBase {
   @Test
   public void testUpgradeTimestampDoesNotChange() throws Exception {
     long tsNow = System.currentTimeMillis();
-    long upgradeTs = store.setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.CONNECTION, tsNow);
+    long upgradeTs = store.initializeAndRetrieveUpgradeTimestampMillis(
+      UpgradeEntityType.CONNECTION, tsNow, new UpgradeState(0L));
     Assert.assertTrue(upgradeTs > 0);
     // wait for time to pass at least 1 milli second
     Tasks.waitFor(true, () -> System.currentTimeMillis() > upgradeTs, 5, TimeUnit.MILLISECONDS);
-    Assert.assertEquals(upgradeTs, store.setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.CONNECTION,
-                                                                              System.currentTimeMillis()));
+    long actual = store.initializeAndRetrieveUpgradeTimestampMillis(
+      UpgradeEntityType.CONNECTION, System.currentTimeMillis(), new UpgradeState(1L));
+    Assert.assertEquals(upgradeTs, actual);
+    Assert.assertEquals(new UpgradeState(0L), store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
   }
 
   @Test
@@ -70,35 +73,45 @@ public class UpgradeStoreTest extends SystemAppTestBase {
       new NamespaceSummary("test2", "", 0L),
       new NamespaceSummary("test3", "", 5L));
 
-    Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION));
-    Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE));
+    Assert.assertNull(store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
+    Assert.assertNull(store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
+
+    UpgradeState preUpgrade = new UpgradeState(0L);
+    store.initializeAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.CONNECTION,
+                                                      System.currentTimeMillis(), preUpgrade);
+    store.initializeAndRetrieveUpgradeTimestampMillis(UpgradeEntityType.WORKSPACE,
+                                                      System.currentTimeMillis(), preUpgrade);
+    Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
+    Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
+
+    UpgradeState upgraded = new UpgradeState(1L);
 
     // assert connection upgrade completion
     namespaces.forEach(ns -> {
-      store.setEntityUpgradeComplete(ns, UpgradeEntityType.CONNECTION);
-      Assert.assertTrue(store.isEntityUpgradeComplete(ns, UpgradeEntityType.CONNECTION));
-      Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION));
-      Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE));
+      store.setEntityUpgradeState(ns, UpgradeEntityType.CONNECTION, upgraded);
+      Assert.assertEquals(upgraded, store.getEntityUpgradeState(ns, UpgradeEntityType.CONNECTION));
+      Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
+      Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
     });
 
     // connection upgrade is done
-    store.setEntityUpgradeComplete(UpgradeEntityType.CONNECTION);
-    Assert.assertTrue(store.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION));
-    Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE));
+    store.setEntityUpgradeState(UpgradeEntityType.CONNECTION, upgraded);
+    Assert.assertEquals(upgraded, store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
+    Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
 
     // assert workspace upgrade completion
     namespaces.forEach(ns -> {
-      store.setEntityUpgradeComplete(ns, UpgradeEntityType.WORKSPACE);
-      Assert.assertTrue(store.isEntityUpgradeComplete(ns, UpgradeEntityType.WORKSPACE));
-      Assert.assertFalse(store.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE));
-      Assert.assertTrue(store.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION));
+      store.setEntityUpgradeState(ns, UpgradeEntityType.WORKSPACE, upgraded);
+      Assert.assertEquals(upgraded, store.getEntityUpgradeState(ns, UpgradeEntityType.WORKSPACE));
+      Assert.assertEquals(preUpgrade, store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
+      Assert.assertEquals(upgraded, store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
     });
 
     // workspace upgrade is done
-    store.setEntityUpgradeComplete(UpgradeEntityType.WORKSPACE);
+    store.setEntityUpgradeState(UpgradeEntityType.WORKSPACE, upgraded);
 
     // upgrade is done
-    Assert.assertTrue(store.isEntityUpgradeComplete(UpgradeEntityType.CONNECTION));
-    Assert.assertTrue(store.isEntityUpgradeComplete(UpgradeEntityType.WORKSPACE));
+    Assert.assertEquals(upgraded, store.getEntityUpgradeState(UpgradeEntityType.CONNECTION));
+    Assert.assertEquals(upgraded, store.getEntityUpgradeState(UpgradeEntityType.WORKSPACE));
   }
 }
