@@ -31,7 +31,7 @@ import io.cdap.cdap.etl.api.StageContext;
 import io.cdap.cdap.etl.api.Transform;
 import io.cdap.wrangler.api.Directive;
 import io.cdap.wrangler.api.DirectiveLoadException;
-import io.cdap.wrangler.utils.ArtifactSelectorUtils;
+import io.cdap.wrangler.utils.ArtifactSummaryComparator;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -197,7 +197,7 @@ public final class UserDirectiveRegistry implements DirectiveRegistry {
                 latestWrangler = artifact;
                 continue;
               }
-              latestWrangler = ArtifactSelectorUtils.pickLatest(latestWrangler, artifact);
+              latestWrangler = ArtifactSummaryComparator.pickLatest(latestWrangler, artifact);
             }
           }
         }

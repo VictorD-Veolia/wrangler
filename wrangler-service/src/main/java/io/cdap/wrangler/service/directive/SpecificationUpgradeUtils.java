@@ -17,7 +17,6 @@
 
 package io.cdap.wrangler.service.directive;
 
-import io.cdap.wrangler.PropertyIds;
 import io.cdap.wrangler.dataset.workspace.Workspace;
 import io.cdap.wrangler.proto.connection.ConnectionType;
 import io.cdap.wrangler.service.bigquery.BigQueryHandler;
@@ -27,7 +26,6 @@ import io.cdap.wrangler.service.kafka.KafkaHandler;
 import io.cdap.wrangler.service.s3.S3Handler;
 import io.cdap.wrangler.service.spanner.SpannerHandler;
 
-import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -37,30 +35,8 @@ import javax.annotation.Nullable;
  * deprecated handlers.
  */
 public class SpecificationUpgradeUtils {
-  private static final Map<String, String> CONNECTION_TYPE_MAP;
-  static {
-    Map<String, String> connectionTypes = new HashMap<>();
-    connectionTypes.put(ConnectionType.BIGQUERY.name().toLowerCase(), "BigQuery");
-    connectionTypes.put(ConnectionType.GCS.name().toLowerCase(), "GCS");
-    connectionTypes.put(ConnectionType.SPANNER.name().toLowerCase(), "Spanner");
-    connectionTypes.put(ConnectionType.DATABASE.name().toLowerCase(), "Database");
-    connectionTypes.put(ConnectionType.S3.name().toLowerCase(), "S3");
-    connectionTypes.put(ConnectionType.KAFKA.name().toLowerCase(), "Kafka");
-    CONNECTION_TYPE_MAP = connectionTypes;
-  }
 
   private SpecificationUpgradeUtils() {
-  }
-
-  /**
-   * Get the connector name for the given connection type.
-   *
-   * @param connectionType the connection type
-   * @return the connector name for the connection type
-   */
-  @Nullable
-  public static String getConnectorName(String connectionType) {
-    return CONNECTION_TYPE_MAP.get(connectionType);
   }
 
   /**
@@ -74,7 +50,7 @@ public class SpecificationUpgradeUtils {
    */
   public static Map<String, String> getConnectorProperties(ConnectionType connectionType,
                                                            Map<String, String> properties) {
-    if (!CONNECTION_TYPE_MAP.containsKey(connectionType.name().toLowerCase())) {
+    if (!ConnectionType.CONN_UPGRADABLE_TYPES.contains(connectionType)) {
       return properties;
     }
 
@@ -99,17 +75,16 @@ public class SpecificationUpgradeUtils {
   /**
    * Get a connector path from the v1 workspace
    *
+   * @param connectionType connectionType of the workspace
    * @param workspace the v1 workspace information
    * @return a connector path, null if the connection type cannot be upgraded to a new connection
    */
   @Nullable
-  public static String getPath(Workspace workspace) {
-    String connType = workspace.getProperties().get(PropertyIds.CONNECTION_TYPE);
-    if (!CONNECTION_TYPE_MAP.containsKey(connType.toLowerCase())) {
+  public static String getPath(ConnectionType connectionType, Workspace workspace) {
+    if (!ConnectionType.CONN_UPGRADABLE_TYPES.contains(connectionType)) {
       return null;
     }
 
-    ConnectionType connectionType = ConnectionType.valueOf(connType.toUpperCase());
     switch (connectionType) {
       case BIGQUERY:
         return BigQueryHandler.getPath(workspace);

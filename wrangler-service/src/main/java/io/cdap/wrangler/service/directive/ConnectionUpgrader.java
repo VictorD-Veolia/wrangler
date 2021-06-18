@@ -18,7 +18,7 @@
 package io.cdap.wrangler.service.directive;
 
 import io.cdap.cdap.api.NamespaceSummary;
-import io.cdap.cdap.api.service.http.SystemHttpServiceContext;
+import io.cdap.cdap.api.service.SystemServiceContext;
 import io.cdap.cdap.etl.proto.connection.ConnectionCreationRequest;
 import io.cdap.cdap.etl.proto.connection.PluginInfo;
 import io.cdap.cdap.spi.data.transaction.TransactionRunners;
@@ -26,6 +26,8 @@ import io.cdap.wrangler.dataset.connections.ConnectionStore;
 import io.cdap.wrangler.proto.ConflictException;
 import io.cdap.wrangler.proto.Namespace;
 import io.cdap.wrangler.proto.connection.Connection;
+import io.cdap.wrangler.proto.connection.ConnectionType;
+import io.cdap.wrangler.store.upgrade.UpgradeEntityType;
 import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,12 +41,12 @@ public class ConnectionUpgrader {
   private static final Logger LOG = LoggerFactory.getLogger(ConnectionUpgrader.class);
 
   private final UpgradeStore upgradeStore;
-  private final SystemHttpServiceContext context;
+  private final SystemServiceContext context;
   private final long upgradeBeforeTsSecs;
   private final ConnectorArtifactLoader artifactLoader;
   private final ConnectionDiscoverer discoverer;
 
-  public ConnectionUpgrader(UpgradeStore upgradeStore, SystemHttpServiceContext context, long upgradeBeforeTsSecs) {
+  public ConnectionUpgrader(UpgradeStore upgradeStore, SystemServiceContext context, long upgradeBeforeTsSecs) {
     this.upgradeStore = upgradeStore;
     this.context = context;
     this.upgradeBeforeTsSecs = upgradeBeforeTsSecs;
@@ -55,11 +57,11 @@ public class ConnectionUpgrader {
   public void upgradeConnections() throws Exception {
     List<NamespaceSummary> namespaces = context.listNamespaces();
     for (NamespaceSummary ns : namespaces) {
-      if (!upgradeStore.isConnectionUpgradeComplete(ns)) {
+      if (!upgradeStore.isEntityUpgradeComplete(ns, UpgradeEntityType.CONNECTION)) {
         upgradeConnectionsInNamespace(ns);
       }
     }
-    upgradeStore.setConnectionUpgradeComplete();
+    upgradeStore.setEntityUpgradeComplete(UpgradeEntityType.CONNECTION);
   }
 
   private void upgradeConnectionsInNamespace(NamespaceSummary namespace) {
@@ -80,22 +82,21 @@ public class ConnectionUpgrader {
       }
 
       // if it is not upgradable
-      String connectionType = connection.getType().name().toLowerCase();
-      String connectorName = SpecificationUpgradeUtils.getConnectorName(connectionType);
-      if (connectorName == null) {
+      ConnectionType type = connection.getType();
+      if (!ConnectionType.CONN_UPGRADABLE_TYPES.contains(type)) {
         continue;
       }
-      
-      PluginInfo pluginInfo = artifactLoader.getPluginInfo(connectorName);
+
+      PluginInfo pluginInfo = artifactLoader.getPluginInfo(type.getConnectorName());
       if (pluginInfo == null) {
         LOG.warn("Unable to find the connector for connection type {} with connection name {}, " +
-                   "upgrade will not be done for it", connectionType, connection.getName());
+                   "upgrade will not be done for it", type.name().toLowerCase(), connection.getName());
         continue;
       }
 
       PluginInfo info = new PluginInfo(
         pluginInfo.getName(), pluginInfo.getType(), pluginInfo.getCategory(),
-        SpecificationUpgradeUtils.getConnectorProperties(connection.getType(), connection.getProperties()),
+        SpecificationUpgradeUtils.getConnectorProperties(type, connection.getProperties()),
         pluginInfo.getArtifact());
       ConnectionCreationRequest request = new ConnectionCreationRequest(connection.getDescription(), info);
       try {
@@ -107,6 +108,6 @@ public class ConnectionUpgrader {
         LOG.warn("Failed to upgrade connection {}", connection.getName(), e);
       }
     }
-    upgradeStore.setConnectionUpgradeComplete(namespace);
+    upgradeStore.setEntityUpgradeComplete(namespace, UpgradeEntityType.CONNECTION);
   }
 }

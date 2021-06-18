@@ -55,14 +55,11 @@ import io.cdap.wrangler.proto.workspace.v2.WorkspaceId;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceSpec;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceUpdateRequest;
 import io.cdap.wrangler.registry.DirectiveInfo;
-import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import io.cdap.wrangler.store.workspace.WorkspaceStore;
 import io.cdap.wrangler.utils.ObjectSerDe;
 import io.cdap.wrangler.utils.SchemaConverter;
 import io.cdap.wrangler.utils.StructuredToRowTransformer;
 import org.apache.commons.lang3.StringEscapeUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
@@ -72,7 +69,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.ws.rs.DELETE;
@@ -85,7 +81,6 @@ import javax.ws.rs.PathParam;
  * V2 endpoints for workspace
  */
 public class WorkspaceHandler extends AbstractDirectiveHandler {
-  private static final Logger LOG = LoggerFactory.getLogger(WorkspaceHandler.class);
 
   private static final Gson GSON =
     new GsonBuilder().registerTypeAdapter(Schema.class, new SchemaTypeAdapter()).create();
@@ -97,38 +92,6 @@ public class WorkspaceHandler extends AbstractDirectiveHandler {
     super.initialize(context);
     wsStore = new WorkspaceStore(context);
     discoverer = new ConnectionDiscoverer(context);
-
-    UpgradeStore upgradeStore = new UpgradeStore(context);
-    if (upgradeStore.isUpgradeComplete()) {
-      return;
-    }
-
-    long upgradeBeforeTsSecs = TimeUnit.MILLISECONDS.toSeconds(upgradeStore.setAndRetrieveUpgradeTimestampMillis());
-    if (!upgradeStore.isConnectionUpgradeComplete()) {
-      try {
-        ConnectionUpgrader connectionUpgrader = new ConnectionUpgrader(upgradeStore, context, upgradeBeforeTsSecs);
-        connectionUpgrader.upgradeConnections();
-      } catch (Exception e) {
-        // check if there is any error upgrading the connections, if true, no point to continue upgrading the workspace
-        // as most connections won't be able to get the spec.
-        // also we don't want the service fail to start due to upgrade failure
-        LOG.error("Failed to upgrade the connections", e);
-        return;
-      }
-    }
-
-    if (!upgradeStore.isWorkspaceUpgradeComplete()) {
-      try {
-        WorkspaceUpgrader workspaceUpgrader =
-          new WorkspaceUpgrader(upgradeStore, context, upgradeBeforeTsSecs, wsStore);
-        workspaceUpgrader.upgradeWorkspaces();
-      } catch (Exception e) {
-        // don't want the service fail to start due to upgrade failure
-        LOG.error("Failed to upgrade the workspaces", e);
-        return;
-      }
-    }
-    upgradeStore.setWorkspaceUpgradeComplete();
   }
 
   @POST

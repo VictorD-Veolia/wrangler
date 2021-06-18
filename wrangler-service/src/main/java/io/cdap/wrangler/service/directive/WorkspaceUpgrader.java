@@ -18,7 +18,7 @@
 package io.cdap.wrangler.service.directive;
 
 import io.cdap.cdap.api.NamespaceSummary;
-import io.cdap.cdap.api.service.http.SystemHttpServiceContext;
+import io.cdap.cdap.api.service.SystemServiceContext;
 import io.cdap.cdap.etl.proto.ArtifactSelectorConfig;
 import io.cdap.cdap.etl.proto.connection.ConnectorDetail;
 import io.cdap.cdap.etl.proto.connection.SpecGenerationRequest;
@@ -28,12 +28,14 @@ import io.cdap.wrangler.api.Row;
 import io.cdap.wrangler.dataset.workspace.Workspace;
 import io.cdap.wrangler.dataset.workspace.WorkspaceDataset;
 import io.cdap.wrangler.proto.NotFoundException;
+import io.cdap.wrangler.proto.connection.ConnectionType;
 import io.cdap.wrangler.proto.workspace.v2.Artifact;
 import io.cdap.wrangler.proto.workspace.v2.Plugin;
 import io.cdap.wrangler.proto.workspace.v2.SampleSpec;
 import io.cdap.wrangler.proto.workspace.v2.StageSpec;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceDetail;
 import io.cdap.wrangler.proto.workspace.v2.WorkspaceId;
+import io.cdap.wrangler.store.upgrade.UpgradeEntityType;
 import io.cdap.wrangler.store.upgrade.UpgradeStore;
 import io.cdap.wrangler.store.workspace.WorkspaceStore;
 import org.slf4j.Logger;
@@ -50,12 +52,12 @@ public class WorkspaceUpgrader {
   private static final Logger LOG = LoggerFactory.getLogger(WorkspaceUpgrader.class);
 
   private final UpgradeStore upgradeStore;
-  private final SystemHttpServiceContext context;
+  private final SystemServiceContext context;
   private final long upgradeBeforeTsSecs;
   private final ConnectionDiscoverer discoverer;
   private final WorkspaceStore wsStore;
 
-  public WorkspaceUpgrader(UpgradeStore upgradeStore, SystemHttpServiceContext context, long upgradeBeforeTsSecs,
+  public WorkspaceUpgrader(UpgradeStore upgradeStore, SystemServiceContext context, long upgradeBeforeTsSecs,
                            WorkspaceStore wsStore) {
     this.upgradeStore = upgradeStore;
     this.context = context;
@@ -67,11 +69,11 @@ public class WorkspaceUpgrader {
   public void upgradeWorkspaces() throws Exception {
     List<NamespaceSummary> namespaces = context.listNamespaces();
     for (NamespaceSummary ns : namespaces) {
-      if (!upgradeStore.isWorkspaceUpgradeComplete(ns)) {
+      if (!upgradeStore.isEntityUpgradeComplete(ns, UpgradeEntityType.WORKSPACE)) {
         upgradeWorkspacesInConnections(ns);
       }
     }
-    upgradeStore.setWorkspaceUpgradeComplete();
+    upgradeStore.setEntityUpgradeComplete(UpgradeEntityType.WORKSPACE);
   }
 
   private void upgradeWorkspacesInConnections(NamespaceSummary namespace) {
@@ -86,7 +88,8 @@ public class WorkspaceUpgrader {
         sample = DirectivesHandler.fromWorkspace(workspace);
       } catch (Exception e) {
         // this should not happen, but guard here to avoid failing the entire upgrade process
-        LOG.warn("Error retrieving the sample for workspace {}", workspace.getName(), e);
+        LOG.warn("Could not decode the sample data for workspace {}. This workspace will not be upgraded",
+                 workspace.getName(), e);
       }
       List<String> directives = workspace.getRequest() == null ? Collections.emptyList() :
                                   workspace.getRequest().getRecipe().getDirectives();
@@ -98,21 +101,30 @@ public class WorkspaceUpgrader {
           .builder(workspace.getName(), workspace.getNamespacedId().getId()).setDirectives(directives)
           .setCreatedTimeMillis(now).setUpdatedTimeMillis(now);
 
-      String connectorName = SpecificationUpgradeUtils.getConnectorName(
-        workspace.getProperties().get(PropertyIds.CONNECTION_TYPE).toLowerCase());
-      String path = SpecificationUpgradeUtils.getPath(workspace);
-      // if the connection type cannot be upgraded, create a workspace with empty sample spec, so there will be
-      // no sources created when converting to pipeline
-      if (path == null) {
+      ConnectionType connectionType =
+        ConnectionType.valueOf(workspace.getProperties().get(PropertyIds.CONNECTION_TYPE).toUpperCase());
+      // if it is not upgradable workspace types, just ignore and continue, i.e, ADLS
+      if (!ConnectionType.WORKSPACE_UPGRADABLE_TYPES.contains(connectionType)) {
+        LOG.warn("Workspace {} of type {} is not upgradable. This workspace will not be upgraded",
+                 workspace.getName(), connectionType);
+        continue;
+      }
+
+      // if this type is not related to any connectors, just save it with empty sample sepc,
+      // so there will be no sources created when converting to pipeline,
+      // for now the only type like this is UPLOAD
+      if (!ConnectionType.CONN_UPGRADABLE_TYPES.contains(connectionType)) {
         wsStore.saveWorkspace(workspaceId, new WorkspaceDetail(ws.build(), sample));
         continue;
       }
 
+      String connectorName = connectionType.getConnectorName();
+      String path = SpecificationUpgradeUtils.getPath(connectionType, workspace);
+
       String connection = workspace.getProperties().get(PropertyIds.CONNECTION_ID);
       try {
-        ConnectorDetail detail =
-          discoverer.getSpecification(namespace.getName(), connection,
-                                      new SpecGenerationRequest(path, Collections.emptyMap()));
+        ConnectorDetail detail = discoverer.getSpecification(namespace.getName(), connection,
+                                                             new SpecGenerationRequest(path, Collections.emptyMap()));
 
         SampleSpec spec = new SampleSpec(
           connection, connectorName, path,
@@ -129,12 +141,11 @@ public class WorkspaceUpgrader {
                    "The workspace will be upgraded without that information", connection, workspace.getName());
         wsStore.saveWorkspace(workspaceId, new WorkspaceDetail(ws.build(), sample));
       } catch (Exception e) {
-        LOG.warn("Unable to get the spec from connection {} for workspace {}. " +
-                   "The workspace will be upgraded without that information", connection, workspace.getName());
-        wsStore.saveWorkspace(workspaceId, new WorkspaceDetail(ws.build(), sample));
+        LOG.warn("Unable to get the spec from connection {} for workspace {}. The workspace will not be upgraded.",
+                 connection, workspace.getName());
       }
     }
 
-    upgradeStore.setWorkspaceUpgradeComplete(namespace);
+    upgradeStore.setEntityUpgradeComplete(namespace, UpgradeEntityType.WORKSPACE);
   }
 }

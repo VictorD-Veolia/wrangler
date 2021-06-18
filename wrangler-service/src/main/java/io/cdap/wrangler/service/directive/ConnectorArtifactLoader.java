@@ -20,12 +20,11 @@ package io.cdap.wrangler.service.directive;
 import io.cdap.cdap.api.artifact.ArtifactInfo;
 import io.cdap.cdap.api.artifact.ArtifactManager;
 import io.cdap.cdap.api.artifact.ArtifactScope;
-import io.cdap.cdap.api.artifact.ArtifactSummary;
 import io.cdap.cdap.api.plugin.PluginClass;
 import io.cdap.cdap.etl.api.connector.Connector;
 import io.cdap.cdap.etl.proto.ArtifactSelectorConfig;
 import io.cdap.cdap.etl.proto.connection.PluginInfo;
-import io.cdap.wrangler.utils.ArtifactSelectorUtils;
+import io.cdap.wrangler.utils.ArtifactSummaryComparator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +80,7 @@ public class ConnectorArtifactLoader {
       return;
     }
 
-    Map<String, ArtifactSummary> connectorPlugins = new HashMap<>();
+    Map<String, ArtifactSummaryComparator> connectorPlugins = new HashMap<>();
     for (ArtifactInfo artifact : artifacts) {
       // for now just support upgrading to system scope artifact to save some logic in finding artifacts in
       // each namespace of connections
@@ -109,15 +108,14 @@ public class ConnectorArtifactLoader {
         }
 
         // if not latest, continue
-        if (connectorPlugins.containsKey(name) &&
-              ArtifactSelectorUtils.isLeftArtifactLarger(connectorPlugins.get(name), artifact)) {
+        if (connectorPlugins.containsKey(name) && connectorPlugins.get(name).compareTo(artifact) > 0) {
           continue;
         }
 
         PluginInfo info = new PluginInfo(name, Connector.PLUGIN_TYPE, plugin.getCategory(), Collections.emptyMap(),
                                          new ArtifactSelectorConfig(artifact.getScope().name().toLowerCase(),
                                                                     artifact.getName(), artifact.getVersion()));
-        connectorPlugins.put(name, artifact);
+        connectorPlugins.put(name, new ArtifactSummaryComparator(artifact));
         connectors.put(name, info);
       }
     }

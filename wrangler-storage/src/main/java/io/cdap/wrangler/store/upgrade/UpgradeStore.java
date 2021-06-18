@@ -17,6 +17,7 @@
 
 package io.cdap.wrangler.store.upgrade;
 
+import com.google.gson.Gson;
 import io.cdap.cdap.api.NamespaceSummary;
 import io.cdap.cdap.spi.data.StructuredRow;
 import io.cdap.cdap.spi.data.StructuredTable;
@@ -37,16 +38,20 @@ import java.util.Optional;
 
 /**
  * Upgrade store to store upgrade information for each namespace,
- * Use system namespace to track the overall upgrade status
+ * Use system namespace to track the overall upgrade status.
+ * This upgrade store can be used as a general purpose for app upgrade:
+ * it has primary key as [namespace][namespace-generation][entity-type] and value [upgrade-ts-millis][upgrade-state]
+ * upgrade state is a serialized string which represents the overall upgrade information and status
  */
 public class UpgradeStore {
   private static final NamespaceSummary SYSTEM_NS = new NamespaceSummary("system", "", 0L);
-  private static final StructuredTableId TABLE_ID = new StructuredTableId("wrangler_upgrade");
+  private static final StructuredTableId TABLE_ID = new StructuredTableId("app_upgrade");
+  private static final Gson GSON = new Gson();
 
   private static final String NAMESPACE_COL = "namespace";
   private static final String GENERATION_COL = "generation";
-  private static final String CONNECTION_UPGRADE_COMPLETE_FIELD = "connection_upgrade_complete";
-  private static final String WORKSPACE_UPGRADE_COMPLETE_FIELD = "workspace_upgrade_complete";
+  private static final String ENTITY_TYPE_COL = "entity_type";
+  private static final String UPGRADE_STATE_COL = "upgrade_state";
   private static final String UPGRADE_TIMESTAMP = "upgrade_timestamp";
 
   public static final StructuredTableSpecification UPGRADE_TABLE_SPEC =
@@ -54,10 +59,10 @@ public class UpgradeStore {
       .withId(TABLE_ID)
       .withFields(Fields.stringType(NAMESPACE_COL),
                   Fields.longType(GENERATION_COL),
-                  Fields.stringType(CONNECTION_UPGRADE_COMPLETE_FIELD),
-                  Fields.stringType(WORKSPACE_UPGRADE_COMPLETE_FIELD),
+                  Fields.stringType(ENTITY_TYPE_COL),
+                  Fields.stringType(UPGRADE_STATE_COL),
                   Fields.longType(UPGRADE_TIMESTAMP))
-      .withPrimaryKeys(NAMESPACE_COL, GENERATION_COL)
+      .withPrimaryKeys(NAMESPACE_COL, GENERATION_COL, ENTITY_TYPE_COL)
       .build();
 
   private final TransactionRunner transactionRunner;
@@ -67,20 +72,19 @@ public class UpgradeStore {
   }
 
   /**
-   * Set the upgrade timestamp if not there and return the upgrade timestamp.
+   * Set the upgrade timestamp for the given upgrade types if not there and return the upgrade timestamp.
    * This method should only be used once when the service starts up.
-   * The upgrade will only operate connections and workspaces created before this timestamp.
+   * The upgrade will only operate on entities created before this timestamp.
    *
    * @return the upgrade timestamp
    */
-  public long setAndRetrieveUpgradeTimestampMillis() {
+  public long setAndRetrieveUpgradeTimestampMillis(UpgradeEntityType type, long timestampMillis) {
     return TransactionRunners.run(transactionRunner, context -> {
       StructuredTable table = context.getTable(TABLE_ID);
-      Collection<Field<?>> fields = getNamespaceKeys(SYSTEM_NS);
+      Collection<Field<?>> fields = getPrimaryKeys(SYSTEM_NS, type);
       Optional<StructuredRow> row = table.read(fields);
 
-      long tsNow = System.currentTimeMillis();
-      fields.add(Fields.longField(UPGRADE_TIMESTAMP, tsNow));
+      fields.add(Fields.longField(UPGRADE_TIMESTAMP, timestampMillis));
 
       // return if it is still there
       if (row.isPresent() && row.get().getLong(UPGRADE_TIMESTAMP) != null) {
@@ -88,68 +92,49 @@ public class UpgradeStore {
       }
 
       table.upsert(fields);
-      return tsNow;
+      return timestampMillis;
     });
   }
 
-  public void setWorkspaceUpgradeComplete() {
+  /**
+   * Set the upgrade complete status for the entity type
+   */
+  public void setEntityUpgradeComplete(UpgradeEntityType type) {
     TransactionRunners.run(transactionRunner, context -> {
-      setComplete(SYSTEM_NS, context, WORKSPACE_UPGRADE_COMPLETE_FIELD);
+      setComplete(SYSTEM_NS, context, type);
     });
   }
 
-  public void setWorkspaceUpgradeComplete(NamespaceSummary namespace) {
+  /**
+   * Set the upgrade complete status for the entity type in a namespace
+   *
+   * @param namespace namespace that completed upgrade
+   */
+  public void setEntityUpgradeComplete(NamespaceSummary namespace, UpgradeEntityType type) {
     TransactionRunners.run(transactionRunner, context -> {
-      setComplete(namespace, context, WORKSPACE_UPGRADE_COMPLETE_FIELD);
+      setComplete(namespace, context, type);
     });
   }
 
-  public void setConnectionUpgradeComplete() {
-    TransactionRunners.run(transactionRunner, context -> {
-      setComplete(SYSTEM_NS, context, CONNECTION_UPGRADE_COMPLETE_FIELD);
-    });
-  }
-
-  public void setConnectionUpgradeComplete(NamespaceSummary namespace) {
-    TransactionRunners.run(transactionRunner, context -> {
-      setComplete(namespace, context, CONNECTION_UPGRADE_COMPLETE_FIELD);
-    });
-  }
-
-  public boolean isWorkspaceUpgradeComplete() {
+  /**
+   * Checks whether an entity type is upgrade complete
+   */
+  public boolean isEntityUpgradeComplete(UpgradeEntityType type) {
     return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(SYSTEM_NS, context, WORKSPACE_UPGRADE_COMPLETE_FIELD);
+      return isComplete(SYSTEM_NS, context, type);
     });
   }
 
-  public boolean isWorkspaceUpgradeComplete(NamespaceSummary namespace) {
+  /**
+   * Checks whether an entity type is upgrade complete in a namespace
+   */
+  public boolean isEntityUpgradeComplete(NamespaceSummary namespace, UpgradeEntityType type) {
     return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(namespace, context, WORKSPACE_UPGRADE_COMPLETE_FIELD);
+      return isComplete(namespace, context, type);
     });
   }
 
-  public boolean isConnectionUpgradeComplete() {
-    return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(SYSTEM_NS, context, CONNECTION_UPGRADE_COMPLETE_FIELD);
-    });
-  }
-
-  public boolean isConnectionUpgradeComplete(NamespaceSummary namespace) {
-    return TransactionRunners.run(transactionRunner, context -> {
-      return isComplete(namespace, context, CONNECTION_UPGRADE_COMPLETE_FIELD);
-    });
-  }
-
-  public boolean isUpgradeComplete() {
-    return TransactionRunners.run(transactionRunner, context -> {
-      StructuredTable table = context.getTable(TABLE_ID);
-      Collection<Field<?>> fields = getNamespaceKeys(SYSTEM_NS);
-      Optional<StructuredRow> row = table.read(fields);
-      return row.isPresent() && "true".equals(row.get().getString(WORKSPACE_UPGRADE_COMPLETE_FIELD)) &&
-               "true".equals(row.get().getString(CONNECTION_UPGRADE_COMPLETE_FIELD));
-    });
-  }
-
+  // visible for testing, storage do not have guava dependency so cannot add annotation
   void clear() {
     TransactionRunners.run(transactionRunner, context -> {
       StructuredTable table = context.getTable(TABLE_ID);
@@ -157,19 +142,30 @@ public class UpgradeStore {
     });
   }
 
-  private void setComplete(NamespaceSummary namespace, StructuredTableContext context, String col) throws IOException {
+  private void setComplete(NamespaceSummary namespace, StructuredTableContext context,
+                           UpgradeEntityType type) throws IOException {
     StructuredTable table = context.getTable(TABLE_ID);
-    Collection<Field<?>> fields = getNamespaceKeys(namespace);
-    fields.add(Fields.stringField(col, "true"));
+    Collection<Field<?>> fields = getPrimaryKeys(namespace, type);
+    fields.add(Fields.stringField(UPGRADE_STATE_COL, GSON.toJson(new UpgradeState(true))));
     table.upsert(fields);
   }
 
-  private Boolean isComplete(NamespaceSummary namespace, StructuredTableContext context,
-                             String col) throws IOException {
+  private boolean isComplete(NamespaceSummary namespace, StructuredTableContext context,
+                             UpgradeEntityType type) throws IOException {
     StructuredTable table = context.getTable(TABLE_ID);
-    Collection<Field<?>> fields = getNamespaceKeys(namespace);
+    Collection<Field<?>> fields = getPrimaryKeys(namespace, type);
     Optional<StructuredRow> row = table.read(fields);
-    return row.isPresent() && "true".equals(row.get().getString(col));
+    if (!row.isPresent() || row.get().getString(UPGRADE_STATE_COL) == null) {
+      return false;
+    }
+
+    return GSON.fromJson(row.get().getString(UPGRADE_STATE_COL), UpgradeState.class).isUpgradeComplete();
+  }
+
+  private Collection<Field<?>> getPrimaryKeys(NamespaceSummary namespace, UpgradeEntityType entityType) {
+    List<Field<?>> keys = new ArrayList<>(getNamespaceKeys(namespace));
+    keys.add(Fields.stringField(ENTITY_TYPE_COL, entityType.name()));
+    return keys;
   }
 
   private Collection<Field<?>> getNamespaceKeys(NamespaceSummary namespace) {
